@@ -33,6 +33,15 @@ def quat_to_rotmat(q):
     ])
 
 
+def _aabb_overlap(a, b) -> bool:
+    """2つのAABB (x0,x1,y0,y1,z0,z1) が重なっているか判定"""
+    ax0, ax1, ay0, ay1, az0, az1 = a
+    bx0, bx1, by0, by1, bz0, bz1 = b
+    return (ax0 < bx1 and ax1 > bx0 and
+            ay0 < by1 and ay1 > by0 and
+            az0 < bz1 and az1 > bz0)
+
+
 def world_aabb_of_packed_item(item: dict):
     """
     settle後の実座標(pos/orn)から、その荷物のワールド座標系AABB(軸平行境界箱)を計算する。
@@ -100,6 +109,9 @@ class ContainerState:
         # local_to_global は x 座標だけ offset_x を加算する実装なので、
         # center[0] から offset_x を逆算できる
         self.offset_x = info['center'][0]
+        self.buffer = info.get('buffer', 0.0)
+        self._packed_items_raw = info.get('packed_items', [])
+        self._transport_obstacles_cache = None
 
         self.res = res
         self.safety = safety
@@ -287,6 +299,92 @@ class ContainerState:
             + np.abs(self.n_vecs) @ np.array(half_lwh, dtype=np.float64)
         return bool(np.all(dots <= margin))
 
+    def check_transport_path_approx(self, item: dict, local_center, orn_idx: int,
+                                     start_margin: float = 0.01, start_z: float = 0.08,
+                                     safety_margin: float = 0.015, ceiling_margin: float = 0.018) -> bool:
+        """
+        validator.check_transport_path (pybulletで実際に少しずつ動かして干渉判定する処理) の近似版。
+        物理エンジンを使わず、y方向移動 -> x方向移動の2セグメントを軸平行AABBの掃引箱として扱い、
+        既配置の荷物および常設の"小さい棚"(small_shelf)との重なりを判定する。
+
+        注意: これはあくまで幾何的な近似(荷物本体の回転や物理的な押し出しは考慮しない)。
+        start_margin/start_z/safety_margin/ceiling_marginはvalidator設定値だが、
+        policyはvalidatorの設定を直接受け取れないため、sample_config.jsonの値を既定値として使う。
+        """
+        half_lwh = get_half_ext(item['length'], item['width'], item['height'], orn_idx)
+        hx, hy, hz = half_lwh
+        L, W, H, T = self.length, self.width, self.height, self.thickness
+        target_x, target_y, target_z = local_center
+
+        # 1. スタートx位置のクランプ(斜めカット領域を避けて、その右側から搬入する)
+        x_min = -L / 2 + T + self.cut_x + hx + start_margin
+        x_max = L / 2 - T - hx - start_margin
+        rel_x = min(max(target_x, x_min), x_max)
+
+        # 2. 直置き判定(床/棚面に十分近ければ浮かせずそのまま横移動)
+        resting_surfaces = [T, H / 2 + T + self.buffer]
+        ceiling_surfaces = [H / 2 + self.buffer, H + self.buffer - T]
+        effective_start_z = start_z
+        bottom_z = target_z - hz
+        for r_z in resting_surfaces:
+            if 0 <= (bottom_z - r_z) <= 0.05:
+                effective_start_z = 0.0
+                break
+        top_z = target_z + hz
+        if effective_start_z > 0.0:
+            for c_z in ceiling_surfaces:
+                clearance = c_z - top_z
+                if 0 <= clearance < (effective_start_z + ceiling_margin):
+                    effective_start_z = max(0.0, clearance - ceiling_margin - 0.0005)
+                    break
+
+        rel_z = min(H + self.buffer - T - hz - start_margin, target_z + effective_start_z)
+
+        obstacles = self._transport_obstacles(safety_margin)
+
+        # セグメント1: (rel_x, y, rel_z) を y=-W/2 -> target_y へ
+        y_lo, y_hi = sorted((-W / 2, target_y))
+        seg1 = (rel_x - hx, rel_x + hx, y_lo - hy, y_hi + hy, rel_z - hz, rel_z + hz)
+        for obs in obstacles:
+            if _aabb_overlap(seg1, obs):
+                return False
+
+        # セグメント2: (x, target_y, rel_z) を rel_x -> target_x へ
+        x_lo, x_hi = sorted((rel_x, target_x))
+        seg2 = (x_lo - hx, x_hi + hx, target_y - hy, target_y + hy, rel_z - hz, rel_z + hz)
+        for obs in obstacles:
+            if _aabb_overlap(seg2, obs):
+                return False
+
+        return True
+
+    def _transport_obstacles(self, safety_margin: float):
+        """既配置の荷物 + 常設の小さい棚(small_shelf)を、ローカル座標系のAABBリストとして返す(safety_margin分だけ膨張済み)"""
+        if self._transport_obstacles_cache is not None:
+            return self._transport_obstacles_cache
+
+        obstacles = []
+        for item in self._packed_items_raw:
+            if item.get('pos') is None or item.get('orn') is None:
+                continue
+            (wx0, wy0, wz0), (wx1, wy1, wz1) = world_aabb_of_packed_item(item)
+            lx0, lx1 = wx0 - self.offset_x, wx1 - self.offset_x
+            obstacles.append((lx0 - safety_margin, lx1 + safety_margin,
+                               wy0 - safety_margin, wy1 + safety_margin,
+                               wz0 - safety_margin, wz1 + safety_margin))
+
+        # 常設の"小さい棚"(cut_x帯の中央高さ付近を横切る固定の梁)。require_shelfの有無に関わらず必ず存在する。
+        L, W, H, T = self.length, self.width, self.height, self.thickness
+        shelf_cx = -L / 2 + self.cut_x / 2 + T
+        shelf_hx, shelf_hy, shelf_hz = self.cut_x / 2, W / 2 - T, T / 2
+        shelf_cz = H / 2 + T / 2 + self.buffer
+        obstacles.append((shelf_cx - shelf_hx - safety_margin, shelf_cx + shelf_hx + safety_margin,
+                           -shelf_hy - safety_margin, shelf_hy + safety_margin,
+                           shelf_cz - shelf_hz - safety_margin, shelf_cz + shelf_hz + safety_margin))
+
+        self._transport_obstacles_cache = obstacles
+        return obstacles
+
 
 class Agent:
     """
@@ -334,6 +432,21 @@ class Agent:
         sorted_items = sorted(item_list, key=sort_key)
         return [it['index'] for it in sorted_items]
 
+    def _try_candidates(self, container_state, item: dict, candidates: list):
+        """候補リストを順に厳密判定(inclusion + 搬入経路)にかけ、最初に通ったものを返す。
+        全滅した場合はNone。"""
+        for placement in candidates:
+            half_lwh = get_half_ext(item['length'], item['width'], item['height'],
+                                     placement['orn_idx'])
+            if not container_state.check_inclusion_exact(placement['local_center'], half_lwh,
+                                                           margin=self.inclusion_margin):
+                continue
+            if not container_state.check_transport_path_approx(item, placement['local_center'],
+                                                                 placement['orn_idx']):
+                continue
+            return placement
+        return None
+
     def policy(self, observation: dict):
         pool_list = observation.get('pool_list', [])
         container_infos = observation.get('container_list', [])
@@ -349,14 +462,17 @@ class Agent:
         for pool_idx, item in enumerate(pool_list):
             prefer_front = bool(item.get('is_prioritized', False))
             for c in containers:
-                candidates = c.best_placement(item, prefer_front=prefer_front)
-                for placement in candidates:
-                    # 厳密判定で通らなければこの候補は捨てて次点へ(1件諦めではなくリカバリする)
-                    half_lwh = get_half_ext(item['length'], item['width'], item['height'],
-                                             placement['orn_idx'])
-                    if not c.check_inclusion_exact(placement['local_center'], half_lwh,
-                                                    margin=self.inclusion_margin):
-                        continue
+                # 1段階目: 少数の候補で高速に探す(通常はここで十分見つかる)
+                candidates = c.best_placement(item, prefer_front=prefer_front, top_k=40)
+                found_here = self._try_candidates(c, item, candidates)
+                if found_here is None:
+                    # 2段階目: 高さ層の浅いところに搬入経路OKな候補が無かった場合のみ、
+                    # コスト覚悟で全件探索にエスカレーションする(policy_timeoutに注意しつつ)
+                    all_candidates = c.best_placement(item, prefer_front=prefer_front,
+                                                        top_k=1_000_000)
+                    found_here = self._try_candidates(c, item, all_candidates)
+                if found_here is not None:
+                    placement = found_here
                     if best is None or placement['score'] < best['score']:
                         best = {
                             'score': placement['score'],
@@ -365,7 +481,6 @@ class Agent:
                             'local_center': placement['local_center'],
                             'orn_idx': placement['orn_idx'],
                         }
-                    break  # このitem×containerでは最初に通った候補(最良)だけ採用
 
         if best is None:
             return self._fallback_action(pool_list)
