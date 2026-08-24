@@ -250,6 +250,18 @@ class ContainerState:
                     if top_z > local_ceiling:
                         continue
 
+                    # 支持率: footprintのうち、実際にbase_z付近(=荷物の底面)で
+                    # 支えられているセルの割合。base_zより明確に低い(=宙に浮いている)
+                    # セルが多い配置は、物理演算でグラつく/転倒するリスクが高いため避ける。
+                    support_tol = max(self.res, 0.02)  # 2cm(またはグリッド解像度)未満の段差は「支持あり」とみなす
+                    supported = region >= (base_z - support_tol)
+                    support_ratio = float(supported.mean())
+
+                    # 支持率が低すぎる(半分未満しか支えられていない)候補はそもそも危険なので除外
+                    min_support_ratio = 0.6
+                    if support_ratio < min_support_ratio:
+                        continue
+
                     # 硬い荷物をソフト手荷物の真上に直接載せることを避ける(可能な限り)
                     soft_penalty = 0.0
                     if not item.get('is_soft', False):
@@ -262,9 +274,13 @@ class ContainerState:
                     # 優先手荷物: 手前(y小 = ドアに近い)を優先 -> 取り出しやすさを重視
                     y_pref = (y_center_idx if prefer_front else -y_center_idx)
 
-                    # 高さ(安定性・衝突リスク)を最優先、次にコンテナ負荷バランス、
-                    # 最後にy方向の好み、という優先順位になるようスケールを分ける
+                    # 支持率が低いほどペナルティを課す(1.0=満点で支持されている場合ペナルティ0)
+                    support_penalty = (1.0 - support_ratio) * 2000.0
+
+                    # 高さ(安定性・衝突リスク)を最優先、次に支持率(転倒防止)、
+                    # 次にコンテナ負荷バランス、最後にy方向の好み、という優先順位
                     score = (round(top_z / self.res) * 10000.0
+                             + support_penalty
                              + self.filled_ratio() * 50.0
                              + y_pref
                              + soft_penalty)
@@ -278,6 +294,7 @@ class ContainerState:
                         'orn_idx': orn_idx,
                         'cells': (ix, ix + fcx, iy, iy + fcy),
                         'top_z': top_z,
+                        'support_ratio': support_ratio,
                     })
 
         if not found:
