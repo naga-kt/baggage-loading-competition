@@ -124,6 +124,10 @@ class ContainerState:
         # float32変換や再計算による丸め誤差で境界判定がフリップしないよう、
         # 内部の安全側計算にだけ使う微小な追加余裕(数値誤差対策。幾何的な意味はない)
         self._eps = 2e-3
+        # ドア際キープアウトゾーンの幅。実機テストで繰り返し、ドアのすぐ手前に荷物が
+        # 密集して後続の搬入経路そのものを塞ぐ致命的な失敗が確認されたため、
+        # 優先/非優先を問わず、この距離以内には一切荷物を置かない。
+        self.door_keepout = 0.25
 
         # 実データから境界を取得(手計算の式に頼らない -> ドア側の壁厚なし等の非対称性にも対応)
         bounds, cut_plane = extract_axis_bounds(self.n_vecs, self.points)
@@ -248,6 +252,14 @@ class ContainerState:
                 local_ceiling = float(self.shelf_band_ceiling[ix:ix + fcx].min())
 
                 for iy in range(0, self.ny - fcy + 1):
+                    # ドア際キープアウトゾーン: 荷物の手前側の辺がドアから一定距離以内に
+                    # 入る配置は、優先/非優先を問わず一切許可しない。
+                    # 全ての荷物はここ(y=y_min)を起点に搬入されるため、ここを塞ぐと
+                    # 後続の荷物が物理的に入れなくなる(実機で繰り返し確認された致命的な失敗パターン)。
+                    near_edge_y = self._idx_to_y(iy)
+                    if near_edge_y < self.y_min + self.door_keepout:
+                        continue
+
                     region = self.height_grid[ix:ix + fcx, iy:iy + fcy]
                     base_z = float(region.max())
                     top_z = base_z + item['height']
@@ -338,7 +350,7 @@ class ContainerState:
 
     def check_transport_path_approx(self, item: dict, local_center, orn_idx: int,
                                      start_margin: float = 0.01, start_z: float = 0.08,
-                                     safety_margin: float = 0.08, ceiling_margin: float = 0.018) -> bool:
+                                     safety_margin: float = 0.03, ceiling_margin: float = 0.018) -> bool:
         """
         validator.check_transport_path (pybulletで実際に少しずつ動かして干渉判定する処理) の近似版。
         物理エンジンを使わず、y方向移動 -> x方向移動の2セグメントを軸平行AABBの掃引箱として扱い、
