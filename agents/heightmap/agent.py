@@ -270,17 +270,33 @@ class ContainerState:
                             soft_penalty = 500.0
 
                     y_center_idx = iy + fcy / 2.0
-                    # 通常: 奥(y大 = ドアから遠い)を優先 -> 後続荷物の搬入経路を塞ぎにくい
-                    # 優先手荷物: 手前(y小 = ドアに近い)を優先 -> 取り出しやすさを重視
-                    y_pref = (y_center_idx if prefer_front else -y_center_idx)
+                    x_center = self._idx_to_x(ix) + fl / 2.0
+
+                    if prefer_front:
+                        # 優先手荷物: 手前(y小)を優先しつつ、中央の搬入レーン(x=0付近)を
+                        # 塞がないよう側面寄り(|x|が大きい側)に誘導する。
+                        # x_center=0で最大、コンテナ端に近づくほど小さくなるペナルティ。
+                        side_bias = (self.length / 2.0 - abs(x_center)) * 30.0
+                        y_pref = y_center_idx + side_bias
+                    else:
+                        # 非優先: 奥(y大 = ドアから遠い)を優先 -> 後続荷物の搬入経路を塞ぎにくい
+                        y_pref = -y_center_idx
+
+                    # ドア際(y最小ライン)に、幅広くx方向に張り出す配置を避ける。
+                    # 通行帯を塞ぐ「壁」になりやすいのは、ドアのすぐ際(iy=0付近)かつ
+                    # x方向に幅がある(fcxが大きい)配置なので、両者の積でペナルティを課す。
+                    door_adjacency = max(0.0, 1.0 - iy * self.res / 0.15)  # ドアから15cm以内で最大1.0
+                    door_block_penalty = door_adjacency * fcx * self.res * 400.0
 
                     # 支持率が低いほどペナルティを課す(1.0=満点で支持されている場合ペナルティ0)
                     support_penalty = (1.0 - support_ratio) * 2000.0
 
                     # 高さ(安定性・衝突リスク)を最優先、次に支持率(転倒防止)、
-                    # 次にコンテナ負荷バランス、最後にy方向の好み、という優先順位
+                    # 次にドア際ブロッキング回避、コンテナ負荷バランス、
+                    # 最後にy方向/側面の好み、という優先順位
                     score = (round(top_z / self.res) * 10000.0
                              + support_penalty
+                             + door_block_penalty
                              + self.filled_ratio() * 50.0
                              + y_pref
                              + soft_penalty)
