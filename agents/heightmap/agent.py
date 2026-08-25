@@ -33,11 +33,14 @@ def quat_to_rotmat(q):
     ])
 
 
-def _aabb_overlap(a, b, eps: float = 0.002) -> bool:
+def _aabb_overlap(a, b, eps: float = 0.0057) -> bool:
     """2つのAABB (x0,x1,y0,y1,z0,z1) が重なっているか判定。
     epsだけ境界を広げて判定する(ギリギリ接するだけの"ほぼ重なり"も安全側で重なり扱いにする)。
     best_placementの探索が貪欲法であるがゆえに、しばしば障害物とのクリアランスが
     ほぼゼロの境界ぎりぎりの候補を選んでしまうため、その対策として境界判定に余裕を持たせる。
+    eps=0.002のようなキリの良い値だと、グリッド解像度(res=0.04)や他のマージン定数との
+    偶然の一致で「厳密に等しい」新たな境界ができてしまい、float32変換のわずかな誤差で
+    判定が反転する事例が実際に確認されたため、意図的に半端な値を使う。
     """
     ax0, ax1, ay0, ay1, az0, az1 = a
     bx0, bx1, by0, by1, bz0, bz1 = b
@@ -123,7 +126,7 @@ class ContainerState:
         self.inclusion_margin = inclusion_margin
         # float32変換や再計算による丸め誤差で境界判定がフリップしないよう、
         # 内部の安全側計算にだけ使う微小な追加余裕(数値誤差対策。幾何的な意味はない)
-        self._eps = 2e-3
+        self._eps = 2.3e-3
         # ドア際キープアウトゾーンの幅。実機テストで繰り返し、ドアのすぐ手前に荷物が
         # 密集して後続の搬入経路そのものを塞ぐ致命的な失敗が確認されたため、
         # 優先/非優先を問わず、この距離以内には一切荷物を置かない。
@@ -350,7 +353,7 @@ class ContainerState:
 
     def check_transport_path_approx(self, item: dict, local_center, orn_idx: int,
                                      start_margin: float = 0.01, start_z: float = 0.08,
-                                     safety_margin: float = 0.03, ceiling_margin: float = 0.018) -> bool:
+                                     safety_margin: float = 0.05, ceiling_margin: float = 0.018) -> bool:
         """
         validator.check_transport_path (pybulletで実際に少しずつ動かして干渉判定する処理) の近似版。
         物理エンジンを使わず、y方向移動 -> x方向移動の2セグメントを軸平行AABBの掃引箱として扱い、
