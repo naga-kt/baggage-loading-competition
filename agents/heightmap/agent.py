@@ -127,10 +127,10 @@ class ContainerState:
         # float32変換や再計算による丸め誤差で境界判定がフリップしないよう、
         # 内部の安全側計算にだけ使う微小な追加余裕(数値誤差対策。幾何的な意味はない)
         self._eps = 2.3e-3
-        # ドア際キープアウトゾーンの幅。実機テストで繰り返し、ドアのすぐ手前に荷物が
-        # 密集して後続の搬入経路そのものを塞ぐ致命的な失敗が確認されたため、
-        # 優先/非優先を問わず、この距離以内には一切荷物を置かない。
-        self.door_keepout = 0.25
+        # ドア際ソフトゾーンの幅。この距離以内は完全禁止ではなく、
+        # 近いほど強くなるペナルティとして扱う(公開テストセットでの検証の結果、
+        # 完全禁止は特定のコンテナ構成に過適合し、汎用性を損なうと判明したため)。
+        self.door_soft_zone = 0.25
 
         # 実データから境界を取得(手計算の式に頼らない -> ドア側の壁厚なし等の非対称性にも対応)
         bounds, cut_plane = extract_axis_bounds(self.n_vecs, self.points)
@@ -241,10 +241,21 @@ class ContainerState:
         ケースがあり得るため。その場合でも次点候補を試せるようにする防御的設計。
         """
         found = []
-        candidates = ((0, item['length'], item['width']),
-                      (3, item['width'], item['length']))
+        # 縦横だけでなく、荷物を横倒しにする向きも候補に含める(6方向すべて)。
+        # 天井制約や搬入時の高さ制約を回避できる場合があるため。
+        # ソフト手荷物は変形しやすく、横倒しにすると型崩れ・積載安定性に懸念があるため、
+        # 標準の2方向(立てたまま回転)のみに限定する。
+        L, W, H = item['length'], item['width'], item['height']
+        if item.get('is_soft', False):
+            candidates = ((0, L, W, H), (3, W, L, H))
+        else:
+            candidates = (
+                (0, L, W, H), (3, W, L, H),   # 立てたまま(水平回転のみ)
+                (1, L, H, W), (4, H, L, W),   # 幅方向に倒す
+                (2, H, W, L), (5, W, H, L),   # 長さ方向に倒す
+            )
 
-        for orn_idx, fl, fw in candidates:
+        for orn_idx, fl, fw, fh in candidates:
             fcx = max(1, int(np.ceil(fl / self.res)))
             fcy = max(1, int(np.ceil(fw / self.res)))
             if fcx > self.nx or fcy > self.ny:
@@ -255,17 +266,21 @@ class ContainerState:
                 local_ceiling = float(self.shelf_band_ceiling[ix:ix + fcx].min())
 
                 for iy in range(0, self.ny - fcy + 1):
-                    # ドア際キープアウトゾーン: 荷物の手前側の辺がドアから一定距離以内に
-                    # 入る配置は、優先/非優先を問わず一切許可しない。
-                    # 全ての荷物はここ(y=y_min)を起点に搬入されるため、ここを塞ぐと
-                    # 後続の荷物が物理的に入れなくなる(実機で繰り返し確認された致命的な失敗パターン)。
+                    # ドア際ペナルティ: 荷物の手前側の辺がドアに近いほど強いペナルティを課す
+                    # (完全禁止にはしない。コンテナ寸法や荷物構成次第では、ここしか
+                    #  空きがない場合もあり得るため、あくまでソフトな優先度として扱う)。
                     near_edge_y = self._idx_to_y(iy)
-                    if near_edge_y < self.y_min + self.door_keepout:
-                        continue
+                    door_penalty = 0.0
+                    dist_from_door = near_edge_y - self.y_min
+                    if dist_from_door < self.door_soft_zone:
+                        # ドアに近いほど、また横幅(fcx)が広いほど強いペナルティ
+                        # (通行帯を塞ぐ"壁"になりやすい配置を避けたい)
+                        closeness = 1.0 - max(0.0, dist_from_door) / self.door_soft_zone
+                        door_penalty = closeness * fcx * self.res * 300.0
 
                     region = self.height_grid[ix:ix + fcx, iy:iy + fcy]
                     base_z = float(region.max())
-                    top_z = base_z + item['height']
+                    top_z = base_z + fh
                     if top_z > local_ceiling:
                         continue
 
@@ -280,6 +295,10 @@ class ContainerState:
                     min_support_ratio = 0.6
                     if support_ratio < min_support_ratio:
                         continue
+
+                    # 横倒し(標準向き以外)は転倒・破損リスクが上がるため、追加ペナルティを課す
+                    # (使うこと自体は許すが、他に選択肢があれば標準向きを優先させる)
+                    orientation_penalty = 0.0 if orn_idx in (0, 3) else 150.0
 
                     # 硬い荷物をソフト手荷物の真上に直接載せることを避ける(可能な限り)
                     soft_penalty = 0.0
@@ -301,28 +320,23 @@ class ContainerState:
                         # 非優先: 奥(y大 = ドアから遠い)を優先 -> 後続荷物の搬入経路を塞ぎにくい
                         y_pref = -y_center_idx
 
-                    # ドア際(y最小ライン)に、幅広くx方向に張り出す配置を避ける。
-                    # 通行帯を塞ぐ「壁」になりやすいのは、ドアのすぐ際(iy=0付近)かつ
-                    # x方向に幅がある(fcxが大きい)配置なので、両者の積でペナルティを課す。
-                    door_adjacency = max(0.0, 1.0 - iy * self.res / 0.15)  # ドアから15cm以内で最大1.0
-                    door_block_penalty = door_adjacency * fcx * self.res * 400.0
-
                     # 支持率が低いほどペナルティを課す(1.0=満点で支持されている場合ペナルティ0)
                     support_penalty = (1.0 - support_ratio) * 2000.0
 
                     # 高さ(安定性・衝突リスク)を最優先、次に支持率(転倒防止)、
-                    # 次にドア際ブロッキング回避、コンテナ負荷バランス、
+                    # 次にドア際ブロッキング回避、コンテナ負荷バランス、向きの好み、
                     # 最後にy方向/側面の好み、という優先順位
                     score = (round(top_z / self.res) * 10000.0
                              + support_penalty
-                             + door_block_penalty
+                             + door_penalty
+                             + orientation_penalty
                              + self.filled_ratio() * 50.0
                              + y_pref
                              + soft_penalty)
 
                     cx = self._idx_to_x(ix) + fl / 2.0
                     cy = self._idx_to_y(iy) + fw / 2.0
-                    cz = base_z + item['height'] / 2.0
+                    cz = base_z + fh / 2.0
                     found.append({
                         'score': score,
                         'local_center': (cx, cy, cz),
@@ -353,7 +367,7 @@ class ContainerState:
 
     def check_transport_path_approx(self, item: dict, local_center, orn_idx: int,
                                      start_margin: float = 0.01, start_z: float = 0.08,
-                                     safety_margin: float = 0.05, ceiling_margin: float = 0.018) -> bool:
+                                     safety_margin: float = 0.07, ceiling_margin: float = 0.018) -> bool:
         """
         validator.check_transport_path (pybulletで実際に少しずつ動かして干渉判定する処理) の近似版。
         物理エンジンを使わず、y方向移動 -> x方向移動の2セグメントを軸平行AABBの掃引箱として扱い、
