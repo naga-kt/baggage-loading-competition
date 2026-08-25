@@ -33,13 +33,17 @@ def quat_to_rotmat(q):
     ])
 
 
-def _aabb_overlap(a, b) -> bool:
-    """2つのAABB (x0,x1,y0,y1,z0,z1) が重なっているか判定"""
+def _aabb_overlap(a, b, eps: float = 0.002) -> bool:
+    """2つのAABB (x0,x1,y0,y1,z0,z1) が重なっているか判定。
+    epsだけ境界を広げて判定する(ギリギリ接するだけの"ほぼ重なり"も安全側で重なり扱いにする)。
+    best_placementの探索が貪欲法であるがゆえに、しばしば障害物とのクリアランスが
+    ほぼゼロの境界ぎりぎりの候補を選んでしまうため、その対策として境界判定に余裕を持たせる。
+    """
     ax0, ax1, ay0, ay1, az0, az1 = a
     bx0, bx1, by0, by1, bz0, bz1 = b
-    return (ax0 < bx1 and ax1 > bx0 and
-            ay0 < by1 and ay1 > by0 and
-            az0 < bz1 and az1 > bz0)
+    return (ax0 < bx1 + eps and ax1 > bx0 - eps and
+            ay0 < by1 + eps and ay1 > by0 - eps and
+            az0 < bz1 + eps and az1 > bz0 - eps)
 
 
 def world_aabb_of_packed_item(item: dict):
@@ -334,7 +338,7 @@ class ContainerState:
 
     def check_transport_path_approx(self, item: dict, local_center, orn_idx: int,
                                      start_margin: float = 0.01, start_z: float = 0.08,
-                                     safety_margin: float = 0.015, ceiling_margin: float = 0.018) -> bool:
+                                     safety_margin: float = 0.08, ceiling_margin: float = 0.018) -> bool:
         """
         validator.check_transport_path (pybulletで実際に少しずつ動かして干渉判定する処理) の近似版。
         物理エンジンを使わず、y方向移動 -> x方向移動の2セグメントを軸平行AABBの掃引箱として扱い、
