@@ -133,7 +133,20 @@ class ContainerState:
         self.door_soft_zone = 0.25
 
         # 実データから境界を取得(手計算の式に頼らない -> ドア側の壁厚なし等の非対称性にも対応)
+        # 注意: self.n_vecs/self.points はグローバル座標(offset_x込み)なので、
+        # ここで抽出される bounds['x_min']/['x_max'] や cut_plane の基準点(px)も
+        # グローバル座標になっている。しかし env.py の仕様上、policyが返す place_pos は
+        # ローカル座標(offset_xを含まない)であるべきで、check_transport_path_approx内の
+        # 各種計算式(x_min_t等)もローカル座標前提で書かれている。この不整合により、
+        # 複数コンテナ(offset_x != 0)構成で座標系が二重に食い違うバグがあったため、
+        # x方向の境界とcut_planeの基準点は、抽出直後にローカル座標へ変換しておく。
+        # (単一コンテナかつoffset_x=0のケースでは影響が0になるため、これまで気づかれていなかった)
         bounds, cut_plane = extract_axis_bounds(self.n_vecs, self.points)
+        bounds['x_min'] -= self.offset_x
+        bounds['x_max'] -= self.offset_x
+        if cut_plane is not None:
+            nx_c, nz_c, px_c, pz_c = cut_plane
+            cut_plane = (nx_c, nz_c, px_c - self.offset_x, pz_c)
         self.x_min = bounds['x_min'] + safety + self._eps
         self.x_max = bounds['x_max'] - safety - self._eps
         self.y_min = bounds['y_min'] + safety + self._eps
@@ -540,10 +553,28 @@ class Agent:
                                       inclusion_margin=self.inclusion_margin)
                       for i, info in enumerate(container_infos)]
 
+        # 複数コンテナがあり、かつ一部が「優先手荷物向け」に指定されている場合、
+        # 荷物側の優先/非優先とコンテナ側のis_prioritizedを組み合わせて、
+        # どちらのコンテナに積むべきかの判断に反映する。
+        # (これまでこの情報はContainerStateに保持されるだけで、実際の配置判断に
+        #  一切使われていなかった。ローカルの検証ケースは1コンテナのみのため
+        #  この欠落は検出できていなかった)
+        any_prioritized_container = len(containers) > 1 and any(c.is_prioritized for c in containers)
+
         best = None
         for pool_idx, item in enumerate(pool_list):
             prefer_front = bool(item.get('is_prioritized', False))
             for c in containers:
+                container_bonus = 0.0
+                if any_prioritized_container:
+                    if prefer_front:
+                        # 優先手荷物は、優先コンテナがあればそちらを強く優先する
+                        container_bonus = -4000.0 if c.is_prioritized else 0.0
+                    else:
+                        # 非優先の荷物は、優先コンテナの容量を後続の優先手荷物のために
+                        # ある程度残しておきたいので、軽く避ける(使うこと自体は許す)
+                        container_bonus = 800.0 if c.is_prioritized else 0.0
+
                 # 1段階目: 少数の候補で高速に探す(通常はここで十分見つかる)
                 candidates = c.best_placement(item, prefer_front=prefer_front, top_k=40)
                 found_here = self._try_candidates(c, item, candidates)
@@ -555,9 +586,10 @@ class Agent:
                     found_here = self._try_candidates(c, item, all_candidates)
                 if found_here is not None:
                     placement = found_here
-                    if best is None or placement['score'] < best['score']:
+                    adjusted_score = placement['score'] + container_bonus
+                    if best is None or adjusted_score < best['score']:
                         best = {
-                            'score': placement['score'],
+                            'score': adjusted_score,
                             'pool_idx': pool_idx,
                             'container': c,
                             'local_center': placement['local_center'],

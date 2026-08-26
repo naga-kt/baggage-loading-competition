@@ -1,0 +1,7 @@
+{
+    "000": {
+        "evaluation": null,
+        "message": "Traceback (most recent call last):\n  File \"/content/drive/MyDrive/nedo_challenge/simulator/src/ground_handling/app.py\", line 78, in run\n    obs, info = env.reset(seed=42)\n                ~~~~~~~~~^^^^^^^^^\n  File \"/content/drive/MyDrive/nedo_challenge/simulator/src/ground_handling/env.py\", line 156, in reset\n    observation = self._get_obs()\n  File \"/content/drive/MyDrive/nedo_challenge/simulator/src/ground_handling/env.py\", line 276, in _get_obs\n    np.copyto(self.shm_depth_map[container.index], depth_map)\n              ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\nIndexError: index 1 is out of bounds for axis 0 with size 1\n",
+        "status": "format_error"
+    }
+}
