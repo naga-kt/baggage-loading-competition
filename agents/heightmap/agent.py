@@ -269,14 +269,15 @@ class ContainerState:
                     # ドア際ペナルティ: 荷物の手前側の辺がドアに近いほど強いペナルティを課す
                     # (完全禁止にはしない。コンテナ寸法や荷物構成次第では、ここしか
                     #  空きがない場合もあり得るため、あくまでソフトな優先度として扱う)。
+                    # ペナルティの強さは「高さ1段分(10000)より少し小さい」スケールにする。
+                    # これにより、他の場所に1段高く積む選択肢があるならそちらを優先するが、
+                    # 床面が埋まってドア際しか選択肢が無い場合には、それでも選べるようにする。
                     near_edge_y = self._idx_to_y(iy)
                     door_penalty = 0.0
                     dist_from_door = near_edge_y - self.y_min
                     if dist_from_door < self.door_soft_zone:
-                        # ドアに近いほど、また横幅(fcx)が広いほど強いペナルティ
-                        # (通行帯を塞ぐ"壁"になりやすい配置を避けたい)
                         closeness = 1.0 - max(0.0, dist_from_door) / self.door_soft_zone
-                        door_penalty = closeness * fcx * self.res * 300.0
+                        door_penalty = (closeness ** 2) * 7000.0
 
                     region = self.height_grid[ix:ix + fcx, iy:iy + fcy]
                     base_z = float(region.max())
