@@ -308,6 +308,20 @@ class ContainerState:
                         if region_soft[region >= base_z - 1e-6].any():
                             soft_penalty = 500.0
 
+                    # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
+                    # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
+                    # (ドアから一直線にしか搬入できないため)。その"塞いでしまう奥行き"に
+                    # 応じてペナルティを課し、無駄にレーンを塞ぐ配置を避ける。
+                    back_start = iy + fcy
+                    if back_start < self.ny:
+                        back_region = self.height_grid[ix:ix + fcx, back_start:]
+                        still_empty = back_region <= (base_z + 1e-6)
+                        stranded_fraction = float(still_empty.mean()) if still_empty.size > 0 else 0.0
+                        stranded_depth_m = (self.ny - back_start) * self.res
+                        stranded_penalty = stranded_fraction * stranded_depth_m * 400.0
+                    else:
+                        stranded_penalty = 0.0
+
                     y_center_idx = iy + fcy / 2.0
                     x_center = self._idx_to_x(ix) + fl / 2.0
 
@@ -331,6 +345,7 @@ class ContainerState:
                              + support_penalty
                              + door_penalty
                              + orientation_penalty
+                             + stranded_penalty
                              + self.filled_ratio() * 50.0
                              + y_pref
                              + soft_penalty)
