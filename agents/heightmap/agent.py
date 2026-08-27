@@ -312,26 +312,21 @@ class ContainerState:
 
                     # 面積比率だけでは「支えが片側に偏っていて反対側が完全に宙に浮いている」
                     # ケースを見逃してしまう(実機でitem24が0.83mズレ・6.5度傾いた原因はこれ)。
-                    # 1) 四隅の支持: 対角線上の少なくとも一方のペアが両方支持されていること
-                    #    (対角の両端が浮いていると、シーソーのように傾きやすい)
-                    # 2) 支持重心の偏り: 支持されているセルの重心が、footprintの幾何中心から
-                    #    大きくズレていないこと(片側だけに支持が集中していないか)
+                    # 当初は四隅・重心チェックを候補の完全除外(continue)にしていたが、
+                    # 公開テストセットで大きくスコアが悪化した(過剰に候補を絞りすぎて
+                    # 配置数が落ちたと考えられる)ため、除外ではなくペナルティのみに変更する。
                     r, cext = supported.shape[0], supported.shape[1]
                     corners = (supported[0, 0], supported[0, cext - 1],
                                supported[r - 1, 0], supported[r - 1, cext - 1])
                     diag_ok = (corners[0] and corners[3]) or (corners[1] and corners[2])
-                    if not diag_ok:
-                        continue
+                    corner_penalty = 0.0 if diag_ok else 1200.0
 
                     idxs_i, idxs_j = np.nonzero(supported)
                     centroid_i = (idxs_i.mean() + 0.5) / r if r > 0 else 0.5
                     centroid_j = (idxs_j.mean() + 0.5) / cext if cext > 0 else 0.5
                     centroid_offset = max(abs(centroid_i - 0.5), abs(centroid_j - 0.5))
-                    # 幾何中心から30%(footprintの半幅の6割)以上ズレている場合は偏りすぎとして除外
-                    if centroid_offset > 0.3:
-                        continue
-                    # ズレの大きさに応じた軽いペナルティ(除外されなかった候補間の優先度づけ)
-                    balance_penalty = centroid_offset * 3000.0
+                    # ズレの大きさに応じたペナルティ(除外はしない。他に選択肢が無ければ使えるようにする)
+                    balance_penalty = centroid_offset * 3000.0 + corner_penalty
 
                     # 横倒し(標準向き以外)は転倒・破損リスクが上がるため、追加ペナルティを課す
                     # (使うこと自体は許すが、他に選択肢があれば標準向きを優先させる)

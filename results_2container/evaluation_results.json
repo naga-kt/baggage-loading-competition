@@ -1,19 +1,19 @@
 {
     "000": {
         "evaluation": {
-            "fill_score": 13.829319167372098,
-            "num_placed_items": 0.6341463414634146
+            "fill_score": 14.741790317685949,
+            "num_placed_items": 0.6585365853658537
         },
         "message": "ok",
         "status": "success",
         "place_states": {
             "is_included": true,
-            "is_valid": false,
+            "is_valid": true,
             "is_placed_safe": false
         },
         "time_results": {
-            "optimization": 0.0004557020000106604,
-            "policy": 0.6646111009999913
+            "optimization": 0.0004611180002029869,
+            "policy": 0.8511023870000827
         }
     }
 }
