@@ -334,6 +334,16 @@ class ContainerState:
                     # (使うこと自体は許すが、他に選択肢があれば標準向きを優先させる)
                     orientation_penalty = 0.0 if orn_idx in (0, 3) else 150.0
 
+                    # 縦横比リスク: 土台(footprintの短辺)に対して高さが大きすぎる「背の高い
+                    # 細長い」向きは、支持がどれだけ完璧でも物理的に転倒しやすい
+                    # (実機でitem5が disp:0.68m, angle:48.2度 で転倒した原因はこれ)。
+                    # 支持率/転倒リスクチェックは「土台の支え方」しか見ておらず、
+                    # この「そもそも姿勢自体が不安定」なケースを見逃していたため追加する。
+                    base_short_side = min(fl, fw)
+                    aspect_ratio = fh / base_short_side if base_short_side > 1e-6 else 0.0
+                    # 高さが土台の短辺の1.5倍を超えたあたりから、超過分に応じてペナルティ増加
+                    aspect_penalty = max(0.0, aspect_ratio - 1.5) * 800.0
+
                     # 硬い荷物をソフト手荷物の真上に直接載せることを避ける(可能な限り)
                     soft_penalty = 0.0
                     if not item.get('is_soft', False):
@@ -377,6 +387,7 @@ class ContainerState:
                     score = (round(top_z / self.res) * 10000.0
                              + support_penalty
                              + tip_penalty
+                             + aspect_penalty
                              + door_penalty
                              + orientation_penalty
                              + stranded_penalty
