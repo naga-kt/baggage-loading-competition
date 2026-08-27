@@ -310,24 +310,6 @@ class ContainerState:
                     if support_ratio < min_support_ratio:
                         continue
 
-                    # 面積比率だけでは「支えが片側に偏っていて反対側が完全に宙に浮いている」
-                    # ケースを見逃してしまう(実機でitem24が0.83mズレ・6.5度傾いた原因はこれ)。
-                    # 当初は四隅・重心チェックを候補の完全除外(continue)にしていたが、
-                    # 公開テストセットで大きくスコアが悪化した(過剰に候補を絞りすぎて
-                    # 配置数が落ちたと考えられる)ため、除外ではなくペナルティのみに変更する。
-                    r, cext = supported.shape[0], supported.shape[1]
-                    corners = (supported[0, 0], supported[0, cext - 1],
-                               supported[r - 1, 0], supported[r - 1, cext - 1])
-                    diag_ok = (corners[0] and corners[3]) or (corners[1] and corners[2])
-                    corner_penalty = 0.0 if diag_ok else 1200.0
-
-                    idxs_i, idxs_j = np.nonzero(supported)
-                    centroid_i = (idxs_i.mean() + 0.5) / r if r > 0 else 0.5
-                    centroid_j = (idxs_j.mean() + 0.5) / cext if cext > 0 else 0.5
-                    centroid_offset = max(abs(centroid_i - 0.5), abs(centroid_j - 0.5))
-                    # ズレの大きさに応じたペナルティ(除外はしない。他に選択肢が無ければ使えるようにする)
-                    balance_penalty = centroid_offset * 3000.0 + corner_penalty
-
                     # 横倒し(標準向き以外)は転倒・破損リスクが上がるため、追加ペナルティを課す
                     # (使うこと自体は許すが、他に選択肢があれば標準向きを優先させる)
                     orientation_penalty = 0.0 if orn_idx in (0, 3) else 150.0
@@ -374,7 +356,6 @@ class ContainerState:
                     # 最後にy方向/側面の好み、という優先順位
                     score = (round(top_z / self.res) * 10000.0
                              + support_penalty
-                             + balance_penalty
                              + door_penalty
                              + orientation_penalty
                              + stranded_penalty
