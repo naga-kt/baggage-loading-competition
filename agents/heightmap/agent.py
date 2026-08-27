@@ -310,6 +310,26 @@ class ContainerState:
                     if support_ratio < min_support_ratio:
                         continue
 
+                    # 転倒リスク: 荷物の幾何中心(重心の近似)が、実際に支持されている範囲の
+                    # 外側(または際)にあると、シーソーのように傾きやすい。
+                    # 支持されている列/行の範囲(x方向・y方向それぞれ)を求め、footprintの中心が
+                    # そこからどれだけ外れているかを見る。以前は四隅・面積重心のチェックで
+                    # 候補を除外/大きく減点していたが、公開テストセットで悪化したため、
+                    # 今回はより物理的に妥当な指標(支持範囲内に中心があるか)を使い、
+                    # かつペナルティの重みも大幅に小さくして、他の判断基準を圧倒しないようにする。
+                    tip_penalty = 0.0
+                    col_supported = np.where(supported.any(axis=1))[0]
+                    row_supported = np.where(supported.any(axis=0))[0]
+                    if len(col_supported) > 0 and len(row_supported) > 0:
+                        center_col = (fcx - 1) / 2.0
+                        center_row = (fcy - 1) / 2.0
+                        x_out = max(0.0, col_supported.min() - center_col,
+                                    center_col - col_supported.max())
+                        y_out = max(0.0, row_supported.min() - center_row,
+                                    center_row - row_supported.max())
+                        # セル単位のはみ出し量 -> ペナルティ(小さめの重み。あくまでタイブレーク用)
+                        tip_penalty = (x_out + y_out) * 80.0
+
                     # 横倒し(標準向き以外)は転倒・破損リスクが上がるため、追加ペナルティを課す
                     # (使うこと自体は許すが、他に選択肢があれば標準向きを優先させる)
                     orientation_penalty = 0.0 if orn_idx in (0, 3) else 150.0
@@ -356,6 +376,7 @@ class ContainerState:
                     # 最後にy方向/側面の好み、という優先順位
                     score = (round(top_z / self.res) * 10000.0
                              + support_penalty
+                             + tip_penalty
                              + door_penalty
                              + orientation_penalty
                              + stranded_penalty
@@ -396,7 +417,7 @@ class ContainerState:
 
     def check_transport_path_approx(self, item: dict, local_center, orn_idx: int,
                                      start_margin: float = 0.01, start_z: float = 0.08,
-                                     safety_margin: float = 0.07, ceiling_margin: float = 0.018) -> bool:
+                                     safety_margin: float = 0.05, ceiling_margin: float = 0.018) -> bool:
         """
         validator.check_transport_path (pybulletで実際に少しずつ動かして干渉判定する処理) の近似版。
         物理エンジンを使わず、y方向移動 -> x方向移動の2セグメントを軸平行AABBの掃引箱として扱い、

@@ -1,8 +1,8 @@
 {
     "000": {
         "evaluation": {
-            "fill_score": 12.765237425929177,
-            "num_placed_items": 0.6097560975609756
+            "fill_score": 15.400641281604878,
+            "num_placed_items": 0.6829268292682927
         },
         "message": "ok",
         "status": "success",
@@ -12,8 +12,8 @@
             "is_placed_safe": false
         },
         "time_results": {
-            "optimization": 0.0003855819999785126,
-            "policy": 0.7267781420000006
+            "optimization": 0.00043314000004102127,
+            "policy": 0.9335804299998927
         }
     }
 }
