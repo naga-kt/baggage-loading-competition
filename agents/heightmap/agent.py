@@ -291,12 +291,12 @@ class ContainerState:
                     if dist_from_door < self.door_soft_zone:
                         closeness = 1.0 - max(0.0, dist_from_door) / self.door_soft_zone
                         door_penalty = (closeness ** 2) * 7000.0
-                        if prefer_front:
-                            # 優先手荷物は「ドア近くに置いて取り出しやすくする」ことが本来の
-                            # 狙いなので、この一般向けドア際ペナルティを大幅に弱める。
-                            # (side_biasによる側面寄せだけでは、この強いペナルティに
-                            #  対抗できず、結局奥に追いやられてしまっていた)
-                            door_penalty *= 0.1
+                        # 注意: 以前は優先手荷物(prefer_front)についてこのペナルティを
+                        # 1/10に弱めていたが、公開テストセットでcog/stability/placement/
+                        # soft_item各スコアが軒並み0になる重大な回帰を引き起こしたため撤回。
+                        # 優先手荷物がドア前に密集して後続の搬入経路を塞ぎ、多くのテスト
+                        # ケースで早期終了(揺らしテストの実施基準未達)に陥ったと推測される。
+                        # 優先手荷物の「取り出しやすさ」は側面寄せ(side_bias)のみで対応する。
 
                     region = self.height_grid[ix:ix + fcx, iy:iy + fcy]
                     base_z = float(region.max())
