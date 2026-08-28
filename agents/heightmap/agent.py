@@ -382,12 +382,20 @@ class ContainerState:
                     support_penalty = (1.0 - support_ratio) * 2000.0
 
                     # 高さ(安定性・衝突リスク)を最優先、次に支持率(転倒防止)、
+                    # 重量考慮: 重い荷物ほど高い位置に置くことへのペナルティを強める。
+                    # これにより、pool内に複数候補がある場合、重い荷物を優先的に
+                    # 低い位置に収め、軽い荷物を上に回す傾向を作る(コンテナ全体の
+                    # 重心を下げ、揺らしテストへの耐性を高める狙い)。
+                    # 同一荷物内の候補比較には影響しない(top_zに比例するだけの定数倍のため)。
+                    mass_height_penalty = item.get('mass', 5.0) * top_z * 5.0
+
                     # 次にドア際ブロッキング回避、コンテナ負荷バランス、向きの好み、
                     # 最後にy方向/側面の好み、という優先順位
                     score = (round(top_z / self.res) * 10000.0
                              + support_penalty
                              + tip_penalty
                              + aspect_penalty
+                             + mass_height_penalty
                              + door_penalty
                              + orientation_penalty
                              + stranded_penalty
@@ -550,11 +558,15 @@ class Agent:
         """
         オフライン最適化: 事前に全荷物が分かっている場合の搬入順序を決める。
         - 優先手荷物を先頭に寄せる(早めに確保しておきたいため)
-        - 同グループ内では体積の大きい順(大物を先に置いた方が空間の断片化を防げる)
+        - 同グループ内では質量の重い順(重い荷物を先に搬入すれば、まだ床面に
+          余裕がある早い段階で低い位置に収まりやすくなり、コンテナ全体の
+          重心を低く保てる。揺らしテストへの耐性にも直結する)
+        - 質量が同じ場合は体積の大きい順(大物を先に置いた方が空間の断片化を防げる)
         """
         def sort_key(it):
             vol = it.get('volume', it['length'] * it['width'] * it['height'])
-            return (0 if it.get('is_prioritized') else 1, -vol)
+            mass = it.get('mass', 0.0)
+            return (0 if it.get('is_prioritized') else 1, -mass, -vol)
 
         sorted_items = sorted(item_list, key=sort_key)
         return [it['index'] for it in sorted_items]
