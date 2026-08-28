@@ -358,7 +358,7 @@ class ContainerState:
                     if not item.get('is_soft', False):
                         region_soft = self.soft_grid[ix:ix + fcx, iy:iy + fcy]
                         if region_soft[region >= base_z - 1e-6].any():
-                            soft_penalty = 1800.0
+                            soft_penalty = 2600.0
 
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
@@ -387,8 +387,8 @@ class ContainerState:
                         # placement_scoreが悪化していたため引き上げた。
                         # (ドア際ペナルティ自体は、以前弱めたことで深刻な回帰を招いたため
                         #  一切変更しない)
-                        side_bias = (self.length / 2.0 - abs(x_center)) * 150.0
-                        y_pref = y_center_idx * 4.0 + side_bias
+                        side_bias = (self.length / 2.0 - abs(x_center)) * 220.0
+                        y_pref = y_center_idx * 6.0 + side_bias
                     else:
                         # 非優先: 奥(y大 = ドアから遠い)を優先 -> 後続荷物の搬入経路を塞ぎにくい
                         y_pref = -y_center_idx
