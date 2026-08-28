@@ -360,6 +360,22 @@ class ContainerState:
                         if region_soft[region >= base_z - 1e-6].any():
                             soft_penalty = 2600.0
 
+                    # 横方向の密着度(噛み合わせ): 左右・前後の隣接列に、この荷物の
+                    # 高さ範囲(base_z〜top_z)まで届く既配置の荷物やコンテナ壁があれば、
+                    # 揺れに対して横滑りしにくくなる。隙間だらけの配置より、隣と
+                    # ぴったり噛み合う配置を優遇する(動的安定性テストへの耐性を狙う)。
+                    # コンテナの壁際(グリッド範囲外)も「支えあり」とみなす。
+                    snug_sides = 0
+                    if ix == 0 or float(self.height_grid[ix - 1, iy:iy + fcy].min()) >= base_z - support_tol:
+                        snug_sides += 1
+                    if ix + fcx >= self.nx or float(self.height_grid[ix + fcx, iy:iy + fcy].min()) >= base_z - support_tol:
+                        snug_sides += 1
+                    if iy == 0 or float(self.height_grid[ix:ix + fcx, iy - 1].min()) >= base_z - support_tol:
+                        snug_sides += 1
+                    if iy + fcy >= self.ny or float(self.height_grid[ix:ix + fcx, iy + fcy].min()) >= base_z - support_tol:
+                        snug_sides += 1
+                    snug_bonus = -snug_sides * 120.0
+
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
                     # (ドアから一直線にしか搬入できないため)。その"塞いでしまう奥行き"に
@@ -419,6 +435,7 @@ class ContainerState:
                              + door_penalty
                              + orientation_penalty
                              + stranded_penalty
+                             + snug_bonus
                              + self.filled_ratio() * 50.0
                              + y_pref
                              + soft_penalty)
