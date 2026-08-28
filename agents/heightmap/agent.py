@@ -291,6 +291,12 @@ class ContainerState:
                     if dist_from_door < self.door_soft_zone:
                         closeness = 1.0 - max(0.0, dist_from_door) / self.door_soft_zone
                         door_penalty = (closeness ** 2) * 7000.0
+                        if prefer_front:
+                            # 優先手荷物は「ドア近くに置いて取り出しやすくする」ことが本来の
+                            # 狙いなので、この一般向けドア際ペナルティを大幅に弱める。
+                            # (side_biasによる側面寄せだけでは、この強いペナルティに
+                            #  対抗できず、結局奥に追いやられてしまっていた)
+                            door_penalty *= 0.1
 
                     region = self.height_grid[ix:ix + fcx, iy:iy + fcy]
                     base_z = float(region.max())
@@ -387,7 +393,12 @@ class ContainerState:
                     # 低い位置に収め、軽い荷物を上に回す傾向を作る(コンテナ全体の
                     # 重心を下げ、揺らしテストへの耐性を高める狙い)。
                     # 同一荷物内の候補比較には影響しない(top_zに比例するだけの定数倍のため)。
-                    mass_height_penalty = item.get('mass', 5.0) * top_z * 5.0
+                    # ソフト手荷物は一般的に軽量なため、この重量考慮ロジックにより
+                    # 「軽いから」という理由だけで不利な扱い(上への配置に誘導)を
+                    # 受けやすくなっていた(soft_item_scoreの悪化の一因)。ソフト手荷物は
+                    # この考慮から除外し、他の基準(高さ最小化など)だけで判断させる。
+                    mass_height_penalty = 0.0 if item.get('is_soft', False) else \
+                        item.get('mass', 5.0) * top_z * 5.0
 
                     # 次にドア際ブロッキング回避、コンテナ負荷バランス、向きの好み、
                     # 最後にy方向/側面の好み、という優先順位
