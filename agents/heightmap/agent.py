@@ -351,11 +351,14 @@ class ContainerState:
                     aspect_penalty = max(0.0, aspect_ratio - 1.5) * 800.0
 
                     # 硬い荷物をソフト手荷物の真上に直接載せることを避ける(可能な限り)
+                    # 重み(500->1800)は、v8以降に追加した各種ペナルティのスケール増加に
+                    # 対して、この保護が相対的に埋もれてしまいsoft_item_scoreが
+                    # 悪化していたため引き上げた。
                     soft_penalty = 0.0
                     if not item.get('is_soft', False):
                         region_soft = self.soft_grid[ix:ix + fcx, iy:iy + fcy]
                         if region_soft[region >= base_z - 1e-6].any():
-                            soft_penalty = 500.0
+                            soft_penalty = 1800.0
 
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
@@ -378,8 +381,14 @@ class ContainerState:
                         # 優先手荷物: 手前(y小)を優先しつつ、中央の搬入レーン(x=0付近)を
                         # 塞がないよう側面寄り(|x|が大きい側)に誘導する。
                         # x_center=0で最大、コンテナ端に近づくほど小さくなるペナルティ。
-                        side_bias = (self.length / 2.0 - abs(x_center)) * 30.0
-                        y_pref = y_center_idx + side_bias
+                        # 重み(30->150, y_center_idxの倍率も4倍)は、v8以降に追加した
+                        # 各種ペナルティ(転倒リスク・縦横比・奥行き温存・重量考慮など)の
+                        # スケール増加に対して、優先手荷物の優遇が相対的に埋もれてしまい
+                        # placement_scoreが悪化していたため引き上げた。
+                        # (ドア際ペナルティ自体は、以前弱めたことで深刻な回帰を招いたため
+                        #  一切変更しない)
+                        side_bias = (self.length / 2.0 - abs(x_center)) * 150.0
+                        y_pref = y_center_idx * 4.0 + side_bias
                     else:
                         # 非優先: 奥(y大 = ドアから遠い)を優先 -> 後続荷物の搬入経路を塞ぎにくい
                         y_pref = -y_center_idx
