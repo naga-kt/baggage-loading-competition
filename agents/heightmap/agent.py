@@ -203,6 +203,9 @@ class ContainerState:
             self.shelf_band_ceiling[:] = np.minimum(self.shelf_band_ceiling, self.height / 2 - safety)
 
         self.filled_volume = 0.0
+        # 荷物同士の密着判定に使うため、既配置荷物を反映する前の
+        # "床のみ"の高さマップ(カット面等は反映済み)を保存しておく
+        self._empty_height_grid = self.height_grid.copy()
         for item in info.get('packed_items', []):
             self._register_item(item)
 
@@ -360,23 +363,40 @@ class ContainerState:
                         if region_soft[region >= base_z - 1e-6].any():
                             soft_penalty = 2600.0
 
-                    # 横方向の密着度(噛み合わせ): 左右・奥の隣接列に、この荷物の
-                    # 高さ範囲まで届く既配置の荷物やコンテナ壁があれば、揺れに対して
-                    # 横滑りしにくくなる。隙間だらけの配置より、隣とぴったり噛み合う
-                    # 配置を優遇する(動的安定性テストへの耐性を狙う)。
-                    # 重要: ドア側(iy==0)は開口部であり壁ではないため、絶対に
-                    # 「密着扱い」にしない(自動的にtrueにすると、ドア前に張り付く
-                    # 配置を強く優遇してしまい、公開テストセットで壊滅的な回帰を
-                    # 招くことが実測で判明したため、二度と繰り返さないよう明記する)。
+                    # 横方向の密着度(噛み合わせ): 隣接列に、この荷物の底面(base_z)付近まで
+                    # 届く"実際の既配置荷物"があれば、揺れに対して横滑りしにくくなる。
+                    # 隙間だらけの配置より、隣の荷物とぴったり噛み合う配置を優遇する
+                    # (動的安定性テストへの耐性を狙う)。
+                    # 重要: コンテナの壁自体は一切「密着」とみなさない(自動的にtrueに
+                    # すると、壁際・ドア際に張り付く配置を強く優遇してしまい、公開
+                    # テストセットで2度に渡り壊滅的な回帰を招いたため、壁は完全に除外し、
+                    # 「実際に隣に荷物がある場合」のみを評価する)。
+                    empty_tol = max(self.res, 0.02)
                     snug_sides = 0
-                    if ix == 0 or float(self.height_grid[ix - 1, iy:iy + fcy].min()) >= base_z - support_tol:
-                        snug_sides += 1
-                    if ix + fcx >= self.nx or float(self.height_grid[ix + fcx, iy:iy + fcy].min()) >= base_z - support_tol:
-                        snug_sides += 1
-                    if iy > 0 and float(self.height_grid[ix:ix + fcx, iy - 1].min()) >= base_z - support_tol:
-                        snug_sides += 1  # ドア側は「実際に隣に荷物がある場合」のみ加点。壁とはみなさない
-                    if iy + fcy >= self.ny or float(self.height_grid[ix:ix + fcx, iy + fcy].min()) >= base_z - support_tol:
-                        snug_sides += 1
+                    if ix > 0:
+                        neigh = self.height_grid[ix - 1, iy:iy + fcy]
+                        base_neigh = self._empty_height_grid[ix - 1, iy:iy + fcy]
+                        if float(neigh.min()) >= base_z - support_tol and \
+                           bool(np.any(neigh > base_neigh + empty_tol)):
+                            snug_sides += 1
+                    if ix + fcx < self.nx:
+                        neigh = self.height_grid[ix + fcx, iy:iy + fcy]
+                        base_neigh = self._empty_height_grid[ix + fcx, iy:iy + fcy]
+                        if float(neigh.min()) >= base_z - support_tol and \
+                           bool(np.any(neigh > base_neigh + empty_tol)):
+                            snug_sides += 1
+                    if iy > 0:
+                        neigh = self.height_grid[ix:ix + fcx, iy - 1]
+                        base_neigh = self._empty_height_grid[ix:ix + fcx, iy - 1]
+                        if float(neigh.min()) >= base_z - support_tol and \
+                           bool(np.any(neigh > base_neigh + empty_tol)):
+                            snug_sides += 1
+                    if iy + fcy < self.ny:
+                        neigh = self.height_grid[ix:ix + fcx, iy + fcy]
+                        base_neigh = self._empty_height_grid[ix:ix + fcx, iy + fcy]
+                        if float(neigh.min()) >= base_z - support_tol and \
+                           bool(np.any(neigh > base_neigh + empty_tol)):
+                            snug_sides += 1
                     snug_bonus = -snug_sides * 120.0
 
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が

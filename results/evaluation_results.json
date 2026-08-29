@@ -1,19 +1,19 @@
 {
     "000": {
         "evaluation": {
-            "fill_score": 14.970142072226038,
-            "num_placed_items": 0.24390243902439024
+            "fill_score": 16.795084372853744,
+            "num_placed_items": 0.2926829268292683
         },
         "message": "ok",
         "status": "success",
         "place_states": {
             "is_included": true,
-            "is_valid": true,
+            "is_valid": false,
             "is_placed_safe": false
         },
         "time_results": {
-            "optimization": 0.0004824679999728687,
-            "policy": 0.3738130270003239
+            "optimization": 0.00039076600000953476,
+            "policy": 0.5413313840000455
         }
     },
     "001": {
@@ -30,7 +30,7 @@
         },
         "time_results": {
             "optimization": 0,
-            "policy": 5.678412193999975
+            "policy": 9.067860491000033
         }
     }
 }
