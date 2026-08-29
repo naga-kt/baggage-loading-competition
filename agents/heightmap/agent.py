@@ -1,3 +1,4 @@
+import time
 import numpy as np
 
 
@@ -203,9 +204,6 @@ class ContainerState:
             self.shelf_band_ceiling[:] = np.minimum(self.shelf_band_ceiling, self.height / 2 - safety)
 
         self.filled_volume = 0.0
-        # 荷物同士の密着判定に使うため、既配置荷物を反映する前の
-        # "床のみ"の高さマップ(カット面等は反映済み)を保存しておく
-        self._empty_height_grid = self.height_grid.copy()
         for item in info.get('packed_items', []):
             self._register_item(item)
 
@@ -363,42 +361,6 @@ class ContainerState:
                         if region_soft[region >= base_z - 1e-6].any():
                             soft_penalty = 2600.0
 
-                    # 横方向の密着度(噛み合わせ): 隣接列に、この荷物の底面(base_z)付近まで
-                    # 届く"実際の既配置荷物"があれば、揺れに対して横滑りしにくくなる。
-                    # 隙間だらけの配置より、隣の荷物とぴったり噛み合う配置を優遇する
-                    # (動的安定性テストへの耐性を狙う)。
-                    # 重要: コンテナの壁自体は一切「密着」とみなさない(自動的にtrueに
-                    # すると、壁際・ドア際に張り付く配置を強く優遇してしまい、公開
-                    # テストセットで2度に渡り壊滅的な回帰を招いたため、壁は完全に除外し、
-                    # 「実際に隣に荷物がある場合」のみを評価する)。
-                    empty_tol = max(self.res, 0.02)
-                    snug_sides = 0
-                    if ix > 0:
-                        neigh = self.height_grid[ix - 1, iy:iy + fcy]
-                        base_neigh = self._empty_height_grid[ix - 1, iy:iy + fcy]
-                        if float(neigh.min()) >= base_z - support_tol and \
-                           bool(np.any(neigh > base_neigh + empty_tol)):
-                            snug_sides += 1
-                    if ix + fcx < self.nx:
-                        neigh = self.height_grid[ix + fcx, iy:iy + fcy]
-                        base_neigh = self._empty_height_grid[ix + fcx, iy:iy + fcy]
-                        if float(neigh.min()) >= base_z - support_tol and \
-                           bool(np.any(neigh > base_neigh + empty_tol)):
-                            snug_sides += 1
-                    if iy > 0:
-                        neigh = self.height_grid[ix:ix + fcx, iy - 1]
-                        base_neigh = self._empty_height_grid[ix:ix + fcx, iy - 1]
-                        if float(neigh.min()) >= base_z - support_tol and \
-                           bool(np.any(neigh > base_neigh + empty_tol)):
-                            snug_sides += 1
-                    if iy + fcy < self.ny:
-                        neigh = self.height_grid[ix:ix + fcx, iy + fcy]
-                        base_neigh = self._empty_height_grid[ix:ix + fcx, iy + fcy]
-                        if float(neigh.min()) >= base_z - support_tol and \
-                           bool(np.any(neigh > base_neigh + empty_tol)):
-                            snug_sides += 1
-                    snug_bonus = -snug_sides * 120.0
-
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
                     # (ドアから一直線にしか搬入できないため)。その"塞いでしまう奥行き"に
@@ -458,7 +420,6 @@ class ContainerState:
                              + door_penalty
                              + orientation_penalty
                              + stranded_penalty
-                             + snug_bonus
                              + self.filled_ratio() * 50.0
                              + y_pref
                              + soft_penalty)
@@ -647,6 +608,13 @@ class Agent:
         return None
 
     def policy(self, observation: dict):
+        # 処理時間の予算管理: policy_timeout(8.0秒)を超過するとタイムアウト扱いで
+        # 失敗になり、揺らしテストが一切実施されない(cog/stability/placement/
+        # soft_item各スコアが軒並み0になる)ことが実測で複数回確認されたため、
+        # 締切に近づいたら安全側に倒して全件探索へのエスカレーションを打ち切る。
+        # 実際のpolicy_timeoutより十分早めに切り上げ、後処理の余裕を確保する。
+        deadline = time.time() + 6.0
+
         pool_list = observation.get('pool_list', [])
         container_infos = observation.get('container_list', [])
 
@@ -682,9 +650,10 @@ class Agent:
                 # 1段階目: 少数の候補で高速に探す(通常はここで十分見つかる)
                 candidates = c.best_placement(item, prefer_front=prefer_front, top_k=40)
                 found_here = self._try_candidates(c, item, candidates)
-                if found_here is None:
+                if found_here is None and time.time() < deadline:
                     # 2段階目: 高さ層の浅いところに搬入経路OKな候補が無かった場合のみ、
-                    # コスト覚悟で全件探索にエスカレーションする(policy_timeoutに注意しつつ)
+                    # コスト覚悟で全件探索にエスカレーションする。
+                    # ただし残り時間が乏しい場合は打ち切り、タイムアウトを避ける。
                     all_candidates = c.best_placement(item, prefer_front=prefer_front,
                                                         top_k=1_000_000)
                     found_here = self._try_candidates(c, item, all_candidates)
