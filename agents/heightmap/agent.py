@@ -161,6 +161,10 @@ class ContainerState:
 
         self.height_grid = np.full((self.nx, self.ny), self.z_floor, dtype=np.float64)
         self.soft_grid = np.zeros((self.nx, self.ny), dtype=bool)
+        # 優先手荷物がどこにあるかを記録する(soft_gridと同様の仕組み)。
+        # 後から別の荷物がその真上に積まれると、せっかくドア近くの低い位置に
+        # 置いても取り出しにくくなってしまう(placement_scoreの頭打ちの一因と推測)。
+        self.priority_grid = np.zeros((self.nx, self.ny), dtype=bool)
 
         # 1) LD3の斜めカット角: 平面の式から列(x)ごとの実際の最低使用可能高さを計算し、
         #    矩形近似ではなく斜面なりに床を持ち上げる
@@ -236,6 +240,7 @@ class ContainerState:
                 self.height_grid[ix0:ix1, iy0:iy1], wz1
             )
             self.soft_grid[ix0:ix1, iy0:iy1] = bool(item.get('is_soft', False))
+            self.priority_grid[ix0:ix1, iy0:iy1] = bool(item.get('is_prioritized', False))
         self.filled_volume += item['length'] * item['width'] * item['height']
 
     def filled_ratio(self) -> float:
@@ -361,6 +366,22 @@ class ContainerState:
                         if region_soft[region >= base_z - 1e-6].any():
                             soft_penalty = 2600.0
 
+                    # 優先手荷物を埋めてしまう配置を避ける: 既に置かれている優先手荷物の
+                    # 真上に別の荷物(優先手荷物自身は除く)を積むと、ドア近くの低い位置に
+                    # 置いた意味が薄れ、取り出しにくくなってしまう。placement_scoreが
+                    # 頭打ちだった一因と考えられるため、この重なりを避けるペナルティを追加する。
+                    # 優先手荷物を埋めてしまう配置を避ける: 既に置かれている優先手荷物の
+                    # 真上に別の荷物(優先手荷物自身は除く)を積むと、ドア近くの低い位置に
+                    # 置いた意味が薄れ、取り出しにくくなってしまう。
+                    # 除外(continue)も試したが、局所的な条件とはいえ配置数への副作用が
+                    # 大きすぎた(検証で一部シナリオの配置数が半減)ため、ペナルティに留める。
+                    # 効果は限定的(埋没を完全には防げない)だが、副作用の少なさを優先する。
+                    priority_bury_penalty = 0.0
+                    if not item.get('is_prioritized', False):
+                        region_priority = self.priority_grid[ix:ix + fcx, iy:iy + fcy]
+                        if region_priority[region >= base_z - 1e-6].any():
+                            priority_bury_penalty = 7000.0
+
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
                     # (ドアから一直線にしか搬入できないため)。その"塞いでしまう奥行き"に
@@ -422,7 +443,8 @@ class ContainerState:
                              + stranded_penalty
                              + self.filled_ratio() * 50.0
                              + y_pref
-                             + soft_penalty)
+                             + soft_penalty
+                             + priority_bury_penalty)
 
                     cx = self._idx_to_x(ix) + fl / 2.0
                     cy = self._idx_to_y(iy) + fw / 2.0
