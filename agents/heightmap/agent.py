@@ -250,7 +250,7 @@ class ContainerState:
 
     # -------------------- 配置探索 --------------------
 
-    def best_placement(self, item: dict, prefer_front: bool, top_k: int = 5):
+    def best_placement(self, item: dict, prefer_front: bool, top_k: int = 5, deadline: float = None):
         """
         この荷物をこのコンテナに置ける候補位置を、スコアの良い順に最大top_k件探索する。
         戻り値: dict(score, local_center, orn_idx, cells, top_z)のリスト(スコア昇順)
@@ -258,6 +258,9 @@ class ContainerState:
         1件だけでなく複数候補を返すのは、近似グリッド上ではベストに見えても、
         (LD3の斜めカット面など)厳密なinclusion判定ではわずかにはみ出して弾かれる
         ケースがあり得るため。その場合でも次点候補を試せるようにする防御的設計。
+
+        deadline(time.time()基準の締切)を渡した場合、探索の途中でも締切を過ぎたら
+        打ち切り、その時点までに見つかった候補を返す(policy_timeout対策)。
         """
         found = []
         # 縦横だけでなく、荷物を横倒しにする向きも候補に含める(6方向すべて)。
@@ -274,13 +277,24 @@ class ContainerState:
                 (2, H, W, L), (5, W, H, L),   # 長さ方向に倒す
             )
 
+        timed_out = False
         for orn_idx, fl, fw, fh in candidates:
+            if timed_out:
+                break
             fcx = max(1, int(np.ceil(fl / self.res)))
             fcy = max(1, int(np.ceil(fw / self.res)))
             if fcx > self.nx or fcy > self.ny:
                 continue
 
             for ix in range(0, self.nx - fcx + 1):
+                # 締切チェック: 全件探索(top_k=1,000,000等)は非常に時間がかかる
+                # 場合があるため、xの列単位で定期的に確認し、超過したら
+                # その時点までの候補で打ち切る(何も見つからない場合でも、
+                # 少なくとも部分的な結果を返す方が、無応答よりはるかに安全)。
+                if deadline is not None and time.time() > deadline:
+                    timed_out = True
+                    break
+
                 # この footprint が跨る列のうち、最も厳しい天井制限(棚帯)を採用
                 local_ceiling = float(self.shelf_band_ceiling[ix:ix + fcx].min())
 
@@ -380,7 +394,7 @@ class ContainerState:
                     if not item.get('is_prioritized', False):
                         region_priority = self.priority_grid[ix:ix + fcx, iy:iy + fcy]
                         if region_priority[region >= base_z - 1e-6].any():
-                            priority_bury_penalty = 7000.0
+                            priority_bury_penalty = 4500.0
 
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
@@ -657,8 +671,14 @@ class Agent:
 
         best = None
         for pool_idx, item in enumerate(pool_list):
+            if time.time() > deadline:
+                # 締切を過ぎたら、残りのpool itemの処理は行わず、
+                # それまでに見つかった最良の候補で確定する
+                break
             prefer_front = bool(item.get('is_prioritized', False))
             for c in containers:
+                if time.time() > deadline:
+                    break
                 container_bonus = 0.0
                 if any_prioritized_container:
                     if prefer_front:
@@ -670,14 +690,17 @@ class Agent:
                         container_bonus = 800.0 if c.is_prioritized else 0.0
 
                 # 1段階目: 少数の候補で高速に探す(通常はここで十分見つかる)
-                candidates = c.best_placement(item, prefer_front=prefer_front, top_k=40)
+                candidates = c.best_placement(item, prefer_front=prefer_front, top_k=40,
+                                               deadline=deadline)
                 found_here = self._try_candidates(c, item, candidates)
                 if found_here is None and time.time() < deadline:
                     # 2段階目: 高さ層の浅いところに搬入経路OKな候補が無かった場合のみ、
                     # コスト覚悟で全件探索にエスカレーションする。
                     # ただし残り時間が乏しい場合は打ち切り、タイムアウトを避ける。
+                    # best_placement自身にもdeadlineを渡し、探索の途中で締切を
+                    # 超えた場合はその時点までの部分的な結果で打ち切らせる。
                     all_candidates = c.best_placement(item, prefer_front=prefer_front,
-                                                        top_k=1_000_000)
+                                                        top_k=1_000_000, deadline=deadline)
                     found_here = self._try_candidates(c, item, all_candidates)
                 if found_here is not None:
                     placement = found_here
