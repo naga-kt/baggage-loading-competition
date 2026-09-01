@@ -1,36 +1,36 @@
 {
     "000": {
         "evaluation": {
-            "fill_score": 18.620026673481448,
-            "num_placed_items": 0.2926829268292683
+            "fill_score": 10.315135403855674,
+            "num_placed_items": 0.21951219512195122
         },
         "message": "ok",
         "status": "success",
         "place_states": {
             "is_included": true,
-            "is_valid": false,
+            "is_valid": true,
             "is_placed_safe": false
         },
         "time_results": {
-            "optimization": 0.0004010050000147203,
-            "policy": 0.343733995999969
+            "optimization": 0.0007342990002143779,
+            "policy": 0.33651739200013253
         }
     },
     "001": {
         "evaluation": {
-            "fill_score": 2.608566770416482,
-            "num_placed_items": 0.19047619047619047
+            "fill_score": 3.9011165456252166,
+            "num_placed_items": 0.21428571428571427
         },
         "message": "ok",
         "status": "success",
         "place_states": {
             "is_included": true,
-            "is_valid": false,
+            "is_valid": true,
             "is_placed_safe": false
         },
         "time_results": {
             "optimization": 0,
-            "policy": 4.808752702000049
+            "policy": 6.0044609149999815
         }
     }
 }

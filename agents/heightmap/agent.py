@@ -331,8 +331,15 @@ class ContainerState:
                     supported = region >= (base_z - support_tol)
                     support_ratio = float(supported.mean())
 
-                    # 支持率が低すぎる(半分未満しか支えられていない)候補はそもそも危険なので除外
-                    min_support_ratio = 0.6
+                    # 支持率が低すぎる候補は危険なので除外する。
+                    # 実測(全76420候補の判定内訳)で、この閾値が全除外理由の中で
+                    # 圧倒的最大(55.1%)を占めていたことが判明した(搬入経路チェックは
+                    # 13.5%に過ぎず、これまで安全マージン調整に費やした労力は
+                    # 実は最大のボトルネックではなかった)。0.6は過度に保守的と判断し、
+                    # 0.45まで緩和する(支持率が低い候補ほどtip_penalty/support_penalty
+                    # で既にスコア上不利になっているため、閾値自体は緩めても
+                    # 極端に不安定な候補が最終的に選ばれるリスクは限定的)。
+                    min_support_ratio = 0.45
                     if support_ratio < min_support_ratio:
                         continue
 
@@ -394,7 +401,7 @@ class ContainerState:
                     if not item.get('is_prioritized', False):
                         region_priority = self.priority_grid[ix:ix + fcx, iy:iy + fcy]
                         if region_priority[region >= base_z - 1e-6].any():
-                            priority_bury_penalty = 4500.0
+                            priority_bury_penalty = 5800.0
 
                     # 奥行き温存: この足場(x列群)において、自分より奥側(y大側)が
                     # まだ同じ高さのまま未使用なら、そこへ後続の荷物が到達できなくなる
