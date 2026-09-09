@@ -613,27 +613,114 @@ class Agent:
         self.inclusion_margin = -0.01
 
     def get_init_states(self, init_states: dict):
-        # 実際の状態構築は毎ステップ policy() 内でobservationから行うため、
-        # ここではコンテナ数などの軽い確認のみ行う
-        self.num_containers = len(init_states.get('container_list', []))
+        # optimize()内で候補となる搬入順序を実際にシミュレーションして比較するために、
+        # コンテナの実寸法情報(n_vecs/points等)を保存しておく。
+        self.init_container_list = init_states.get('container_list', [])
+        self.num_containers = len(self.init_container_list)
         return True
 
     def optimize(self, item_list: list):
         """
         オフライン最適化: 事前に全荷物が分かっている場合の搬入順序を決める。
-        - 優先手荷物を先頭に寄せる(早めに確保しておきたいため)
-        - 同グループ内では質量の重い順(重い荷物を先に搬入すれば、まだ床面に
-          余裕がある早い段階で低い位置に収まりやすくなり、コンテナ全体の
-          重心を低く保てる。揺らしテストへの耐性にも直結する)
-        - 質量が同じ場合は体積の大きい順(大物を先に置いた方が空間の断片化を防げる)
+
+        複数の候補順序を用意し、実際のコンテナ形状に対して軽量シミュレーションを
+        行い、より多くの体積を配置でき、かつ低い位置に収まる順序を選択する
+        (optimization_timeoutが180秒と余裕があるため、この時間を活用する)。
+
+        候補1: 質量順(従来通り) - 優先手荷物を先頭に、同グループ内は質量の重い順、
+               同質量なら体積の大きい順。
+        候補2: 質量×底面積×高さの層まとまりを考慮した複合順序 - 質量を粗い階層
+               (3kg刻み)でまとめ、同階層内では高さを8cm刻みでグルーピングして
+               近い高さの荷物を連続させる(平らな層を作りやすくし、item24/item5で
+               見られたような凸凹面での転倒を避ける狙い)。さらに同グループ内では
+               底面積の大きい順(安定した土台になりやすい)、体積の大きい順とする。
         """
-        def sort_key(it):
+        def base_sort_key(it):
             vol = it.get('volume', it['length'] * it['width'] * it['height'])
             mass = it.get('mass', 0.0)
             return (0 if it.get('is_prioritized') else 1, -mass, -vol)
 
-        sorted_items = sorted(item_list, key=sort_key)
-        return [it['index'] for it in sorted_items]
+        def composite_sort_key(it):
+            vol = it.get('volume', it['length'] * it['width'] * it['height'])
+            mass = it.get('mass', 0.0)
+            l, w, h = it['length'], it['width'], it['height']
+            footprint = l * w
+            mass_tier = -round(mass / 3.0)      # 質量を粗く階層化(重い階層を先に)
+            height_bucket = round(h / 0.08)      # 高さを粗くグルーピング(同程度の高さを連続させる)
+            return (0 if it.get('is_prioritized') else 1, mass_tier, height_bucket, -footprint, -vol)
+
+        candidate_orders = {
+            'mass_volume': sorted(item_list, key=base_sort_key),
+            'mass_height_footprint': sorted(item_list, key=composite_sort_key),
+        }
+
+        if not getattr(self, 'init_container_list', None):
+            # コンテナ情報が無い(get_init_states未呼び出し等)場合はシミュレーション
+            # できないため、複合順序をそのまま採用する
+            return [it['index'] for it in candidate_orders['mass_height_footprint']]
+
+        # optimization_timeout(180秒)に対して十分な余裕を残しつつ、
+        # 各候補のシミュレーションに使える時間を配分する
+        overall_deadline = time.time() + 150.0
+        per_candidate_budget = 60.0
+
+        best_order, best_score, best_name = None, None, None
+        for name, ordering in candidate_orders.items():
+            if time.time() > overall_deadline:
+                break
+            candidate_deadline = min(overall_deadline, time.time() + per_candidate_budget)
+            score = self._simulate_ordering(ordering, candidate_deadline)
+            if best_score is None or score > best_score:
+                best_score, best_order, best_name = score, ordering, name
+
+        if best_order is None:
+            best_order = candidate_orders['mass_height_footprint']
+        return [it['index'] for it in best_order]
+
+    def _simulate_ordering(self, ordered_items: list, deadline: float) -> float:
+        """指定した搬入順序を、実際のコンテナ形状に対して軽量シミュレーションし、
+        どこまで配置できるかを評価する。オンライン側(policy)と同じ
+        best_placement/_try_candidatesの仕組みを使うが、top_kを抑えて高速化する。
+        戻り値: 配置できた体積の合計を主指標とし、最大到達高さ(低いほど良い)を
+        僅かに減点するスコア(タイブレーク用。重心を意識した順序をわずかに優遇)。
+        """
+        total_volume = 0.0
+        max_height_reached = 0.0
+        containers = []
+        for i, info in enumerate(self.init_container_list):
+            sim_info = dict(info)
+            sim_info['packed_items'] = []
+            containers.append(ContainerState(sim_info, list_pos=i, res=self.res, safety=self.safety,
+                                              inclusion_margin=self.inclusion_margin))
+
+        for item in ordered_items:
+            if time.time() > deadline:
+                break
+            prefer_front = bool(item.get('is_prioritized', False))
+            best_c, best_result = None, None
+            for c in containers:
+                cands = c.best_placement(item, prefer_front=prefer_front, top_k=25, deadline=deadline)
+                found = self._try_candidates(c, item, cands)
+                if found is not None and (best_result is None or found['score'] < best_result['score']):
+                    best_result, best_c = found, c
+            if best_result is None:
+                # この順序では、この荷物のところで配置できずに詰まった
+                # (実環境ではここでエピソードが終了する) -> シミュレーションもここで終了
+                break
+
+            half = get_half_ext(item['length'], item['width'], item['height'], best_result['orn_idx'])
+            packed = dict(item)
+            packed['pos'] = tuple(float(x) for x in
+                                   np.array(best_result['local_center']) + np.array([best_c.offset_x, 0, 0]))
+            packed['orn'] = (0, 0, 0, 1)
+            packed['length'], packed['width'], packed['height'] = 2 * half[0], 2 * half[1], 2 * half[2]
+            best_c._register_item(packed)
+
+            total_volume += item.get('volume', item['length'] * item['width'] * item['height'])
+            top_z = best_result['local_center'][2] + half[2]
+            max_height_reached = max(max_height_reached, top_z)
+
+        return total_volume - max_height_reached * 0.01
 
     def _try_candidates(self, container_state, item: dict, candidates: list):
         """候補リストを順に厳密判定(inclusion + 搬入経路)にかけ、最初に通ったものを返す。

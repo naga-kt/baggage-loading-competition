@@ -12,14 +12,14 @@
             "is_placed_safe": false
         },
         "time_results": {
-            "optimization": 0.0007342990002143779,
-            "policy": 0.33651739200013253
+            "optimization": 0.0004724489999716752,
+            "policy": 0.36835740400010764
         }
     },
     "001": {
         "evaluation": {
-            "fill_score": 3.9011165456252166,
-            "num_placed_items": 0.21428571428571427
+            "fill_score": 0,
+            "num_placed_items": 0.14285714285714285
         },
         "message": "ok",
         "status": "success",
@@ -30,7 +30,7 @@
         },
         "time_results": {
             "optimization": 0,
-            "policy": 6.0044609149999815
+            "policy": 5.247523792000038
         }
     }
 }
