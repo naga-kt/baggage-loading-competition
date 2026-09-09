@@ -227,6 +227,8 @@ class ContainerState:
 
     def _register_item(self, item: dict):
         """既に積み付けられている荷物1個を高さグリッドに反映する"""
+        self._transport_obstacles_cache = None
+
         if item.get('pos') is None or item.get('orn') is None:
             return
         (wx0, wy0, wz0), (wx1, wy1, wz1) = world_aabb_of_packed_item(item)
@@ -689,7 +691,7 @@ class Agent:
         containers = []
         for i, info in enumerate(self.init_container_list):
             sim_info = dict(info)
-            sim_info['packed_items'] = []
+            sim_info['packed_items'] = list(info.get('packed_items', []))
             containers.append(ContainerState(sim_info, list_pos=i, res=self.res, safety=self.safety,
                                               inclusion_margin=self.inclusion_margin))
 
