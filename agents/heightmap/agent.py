@@ -785,14 +785,19 @@ class Agent:
                         # ある程度残しておきたいので、軽く避ける(使うこと自体は許す)
                         container_bonus = 800.0 if c.is_prioritized else 0.0
 
-                # 候補を一度だけ探索する。
-                # 40件では搬入経路チェックで全滅するケースがある一方、
-                # 1,000,000件の再探索はpolicy時間を大きく消費するため、
-                # 最初から十分な数の上位候補を保持して厳密判定する。
-                candidates = c.best_placement(item, prefer_front=prefer_front, top_k=200,
+                # 1段階目: 少数の候補で高速に探す(通常はここで十分見つかる)
+                candidates = c.best_placement(item, prefer_front=prefer_front, top_k=40,
                                                deadline=deadline)
                 found_here = self._try_candidates(c, item, candidates)
-
+                if found_here is None and time.time() < deadline:
+                    # 2段階目: 高さ層の浅いところに搬入経路OKな候補が無かった場合のみ、
+                    # コスト覚悟で全件探索にエスカレーションする。
+                    # ただし残り時間が乏しい場合は打ち切り、タイムアウトを避ける。
+                    # best_placement自身にもdeadlineを渡し、探索の途中で締切を
+                    # 超えた場合はその時点までの部分的な結果で打ち切らせる。
+                    all_candidates = c.best_placement(item, prefer_front=prefer_front,
+                                                        top_k=1_000_000, deadline=deadline)
+                    found_here = self._try_candidates(c, item, all_candidates)
                 if found_here is not None:
                     placement = found_here
                     adjusted_score = placement['score'] + container_bonus
