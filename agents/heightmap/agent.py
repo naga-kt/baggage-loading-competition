@@ -703,13 +703,16 @@ class Agent:
             for c in containers:
                 cands = c.best_placement(item, prefer_front=prefer_front, top_k=25, deadline=deadline)
                 found = self._try_candidates(c, item, cands)
+                if found is None and cands:
+                    cands = c.best_placement(item, prefer_front=prefer_front,
+                                            top_k=1_000_000, deadline=deadline)
+                    found = self._try_candidates(c, item, cands)
                 if found is not None and (best_result is None or found['score'] < best_result['score']):
                     best_result, best_c = found, c
             if best_result is None:
-                # この順序ではこの荷物を配置できないため、この荷物だけを飛ばして
-                # 次の荷物についてシミュレーションを継続する。
-                # 実環境でも配置失敗した荷物はremovedとなり、後続の荷物は処理される。
-                continue
+                # この順序では、この荷物のところで配置できずに詰まった
+                # (実環境ではここでエピソードが終了する) -> シミュレーションもここで終了
+                break
 
             half = get_half_ext(item['length'], item['width'], item['height'], best_result['orn_idx'])
             packed = dict(item)
