@@ -706,9 +706,10 @@ class Agent:
                 if found is not None and (best_result is None or found['score'] < best_result['score']):
                     best_result, best_c = found, c
             if best_result is None:
-                # この順序では、この荷物のところで配置できずに詰まった
-                # (実環境ではここでエピソードが終了する) -> シミュレーションもここで終了
-                break
+                # この順序ではこの荷物を配置できないため、この荷物だけを飛ばして
+                # 次の荷物についてシミュレーションを継続する。
+                # 実環境でも配置失敗した荷物はremovedとなり、後続の荷物は処理される。
+                continue
 
             half = get_half_ext(item['length'], item['width'], item['height'], best_result['orn_idx'])
             packed = dict(item)

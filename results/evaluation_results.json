@@ -12,8 +12,8 @@
             "is_placed_safe": false
         },
         "time_results": {
-            "optimization": 6.979878007000025,
-            "policy": 0.34173718600004577
+            "optimization": 8.731328089000272,
+            "policy": 0.35819145000004937
         }
     },
     "001": {
@@ -30,7 +30,7 @@
         },
         "time_results": {
             "optimization": 0,
-            "policy": 5.851549234000231
+            "policy": 5.385209891999693
         }
     }
 }
